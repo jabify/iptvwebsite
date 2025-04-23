@@ -1,0 +1,176 @@
+// Backend API (Node.js + Express)
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const mongoose = require('mongoose');
+const dotenv = require('dotenv');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const fs = require('fs');
+const xml2js = require('xml2js');
+const multer = require('multer');
+const path = require('path');
+
+const app = express();
+dotenv.config();
+
+app.use(cors());
+app.use(bodyParser.json());
+app.use('/vod', express.static(path.join(__dirname, 'vod')));
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+// Channel Schema
+const channelSchema = new mongoose.Schema({
+  name: String,
+  logoUrl: String,
+  streamUrl: String
+});
+const Channel = mongoose.model('Channel', channelSchema);
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  email: { type: String, unique: true },
+  password: String
+});
+const User = mongoose.model('User', userSchema);
+
+// EPG Schema
+const epgSchema = new mongoose.Schema({
+  channelId: mongoose.Schema.Types.ObjectId,
+  title: String,
+  description: String,
+  start: Date,
+  stop: Date
+});
+const EPG = mongoose.model('EPG', epgSchema);
+
+// VOD Schema
+const vodSchema = new mongoose.Schema({
+  title: String,
+  description: String,
+  filePath: String,
+  uploadDate: { type: Date, default: Date.now }
+});
+const VOD = mongoose.model('VOD', vodSchema);
+
+// Auth Middleware
+const authenticate = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Unauthorized' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(403).json({ message: 'Forbidden' });
+  }
+};
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password } = req.body;
+  const existing = await User.findOne({ email });
+  if (existing) return res.status(400).json({ message: 'Email already in use' });
+  const hashed = await bcrypt.hash(password, 10);
+  const user = new User({ email, password: hashed });
+  await user.save();
+  const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+  if (!user) return res.status(400).json({ message: 'Invalid credentials' });
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
+  const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+// Get all channels
+app.get('/api/channels', async (req, res) => {
+  const channels = await Channel.find();
+  res.json(channels);
+});
+
+// Admin: Add new channel
+app.post('/api/admin/channels', authenticate, async (req, res) => {
+  const { name, logoUrl, streamUrl } = req.body;
+  const newChannel = new Channel({ name, logoUrl, streamUrl });
+  await newChannel.save();
+  res.status(201).json(newChannel);
+});
+
+// Admin: Edit channel
+app.put('/api/admin/channels/:id', authenticate, async (req, res) => {
+  const { id } = req.params;
+  const updated = await Channel.findByIdAndUpdate(id, req.body, { new: true });
+  res.json(updated);
+});
+
+// Admin: Delete channel
+app.delete('/api/admin/channels/:id', authenticate, async (req, res) => {
+  const { id } = req.params;
+  await Channel.findByIdAndDelete(id);
+  res.status(204).end();
+});
+
+// Load EPG from XMLTV
+app.post('/api/admin/epg/load', authenticate, async (req, res) => {
+  const parser = new xml2js.Parser();
+  const xmlData = fs.readFileSync('./sample_epg.xml', 'utf-8');
+
+  parser.parseString(xmlData, async (err, result) => {
+    if (err) return res.status(500).json({ message: 'Failed to parse EPG XML' });
+
+    const programs = result.tv.programme;
+    await EPG.deleteMany({});
+
+    for (const p of programs) {
+      const epgItem = new EPG({
+        channelId: null, // Needs mapping to channelId
+        title: p.title?.[0] || 'No Title',
+        description: p.desc?.[0] || '',
+        start: new Date(p.$.start),
+        stop: new Date(p.$.stop)
+      });
+      await epgItem.save();
+    }
+    res.json({ message: 'EPG loaded successfully', count: programs.length });
+  });
+});
+
+// VOD Upload Config
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, 'vod'),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+});
+const upload = multer({ storage });
+
+// Upload VOD
+app.post('/api/admin/vod/upload', authenticate, upload.single('video'), async (req, res) => {
+  const { title, description } = req.body;
+  const vod = new VOD({
+    title,
+    description,
+    filePath: `/vod/${req.file.filename}`
+  });
+  await vod.save();
+  res.status(201).json(vod);
+});
+
+// Get all VODs
+app.get('/api/vod', async (req, res) => {
+  const vods = await VOD.find().sort({ uploadDate: -1 });
+  res.json(vods);
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
