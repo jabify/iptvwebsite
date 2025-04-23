@@ -1,0 +1,30 @@
+project-root/
+├── backend/
+│   ├── controllers/
+│   ├── models/
+│   ├── routes/
+│   ├── services/
+│   ├── middleware/
+│   ├── config/
+│   ├── utils/
+│   ├── server.js
+│   └── .env
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── assets/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   └── vite.config.js
+├── database/
+│   └── schema.sql
+├── docs/
+│   └── README.md
+├── scripts/
+│   └── setup.sh
+├── package.json
+└── README.md
